@@ -1,0 +1,43 @@
+// federated.proto
+syntax = "proto3";
+
+package federated;
+
+// -----------------------------------------------------------------
+// The Service Definition (The API Endpoints)
+// -----------------------------------------------------------------
+service FederatedLearning {
+  // Client calls this to get the latest global model from the server
+  rpc GetGlobalModel (ModelRequest) returns (GlobalModel) {}
+
+  // Client calls this to send its locally trained weights back to the server
+  rpc SendLocalUpdate (LocalUpdate) returns (UpdateAck) {}
+}
+
+// -----------------------------------------------------------------
+// The Message Definitions (The Data Structures)
+// -----------------------------------------------------------------
+
+// A simple empty request message. The client just says "I am ready."
+message ModelRequest {
+  string client_id = 1;
+}
+
+// The Server responds with the current mathematical state of the AI
+message GlobalModel {
+  int32 round_number = 1;       // Which training iteration we are on
+  bytes model_weights = 2;      // The serialized PyTorch Tensor (The AI brain)
+}
+
+// The Client sends this back after training on its local, private data
+message LocalUpdate {
+  string client_id = 1;         // Who is sending this?
+  int32 data_size = 2;          // Math requirement: n_k (How many samples were used)
+  bytes model_weights = 3;      // The newly computed PyTorch Tensor
+}
+
+// The Server acknowledges receipt of the client's update
+message UpdateAck {
+  bool success = 1;
+  string message = 2;
+}
