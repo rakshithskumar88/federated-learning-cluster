@@ -10,6 +10,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'generated'))
 import federated_pb2
 import federated_pb2_grpc
 
+# NEW (Dynamic Variables): Dynamically read infrastructure variables injected by Podman Compose
+# This prevents rootless namespace collisions by avoiding 'localhost'
+CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
+SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
+
 def train_local_model(global_weights, data_size=100, learning_rate=0.1):
     print("\n[COMPUTE] Moving weights to parallel execution space...")
     
@@ -41,13 +46,15 @@ def train_local_model(global_weights, data_size=100, learning_rate=0.1):
 
 def run_client():
     # Establish high-speed TCP socket connection to our Aggregator Server
-    print("[NETWORK] Connecting to Aggregation Server via gRPC channel...")
-    with grpc.insecure_channel('localhost:50052') as channel:
+    # UPDATE: Utilizing dynamic SERVER_ADDR injected via Podman network bridge
+    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server at {SERVER_ADDR}...")
+    with grpc.insecure_channel(SERVER_ADDR) as channel:
         stub = federated_pb2_grpc.FederatedLearningStub(channel)
         
         # 1. Request the latest global model from the server
         print("[RPC] Pulling global model state...")
-        request = federated_pb2.ModelRequest(client_id="node_sahakarnagar_01")
+        # UPDATE: Utilizing dynamic CLIENT_ID
+        request = federated_pb2.ModelRequest(client_id=CLIENT_ID)
         global_model_response = stub.GetGlobalModel(request)
         
         # Deserialize the binary stream from the network back into a PyTorch Matrix
@@ -68,8 +75,9 @@ def run_client():
         
         # 4. Beam the mathematical updates back to the server contract
         print("[RPC] Streaming local mathematical adjustments back to server...")
+        # UPDATE: Utilizing dynamic CLIENT_ID
         update_payload = federated_pb2.LocalUpdate(
-            client_id="node_sahakarnagar_01",
+            client_id=CLIENT_ID,
             data_size=local_n,
             model_weights=out_buffer.getvalue()
         )
