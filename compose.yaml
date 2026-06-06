@@ -1,24 +1,33 @@
+# compose.yaml
 version: '3.8'
 
 services:
+  # ---------------------------------------------------------
+  # THE AGGREGATOR: Bound to the host CPU (No GPU access)
+  # ---------------------------------------------------------
   server:
     image: docker.io/library/python:3.11-slim
     container_name: fl_aggregator_node
     volumes:
       - .:/app
     working_dir: /app
+    # Execute our CPU-bound averaging logic
     command: bash -c "pip install torch grpcio grpcio-tools protobuf && python src/server.py"
     ports:
       - "50052:50052"
     networks:
       - federated_network
 
+  # ---------------------------------------------------------
+  # CLIENT 1: Bound explicitly to your NVIDIA RTX 4070
+  # ---------------------------------------------------------
   client_sahakarnagar_01:
     image: docker.io/library/python:3.11-slim
     container_name: fl_client_node_1
     volumes:
       - .:/app
     working_dir: /app
+    # We must explicitly request the NVIDIA container toolkit capabilities here
     deploy:
       resources:
         reservations:
@@ -33,5 +42,6 @@ services:
       - server
 
 networks:
+  # Create a dedicated, isolated software-defined network for our nodes
   federated_network:
     driver: bridge
