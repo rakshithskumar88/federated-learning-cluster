@@ -12,8 +12,7 @@ services:
       - .:/app
     working_dir: /app
     # Execute our CPU-bound averaging logic
-    # UPDATE (SSL Bypass): Added --trusted-host flags to prevent certificate verification
-    # failures when downloading PyTorch inside the isolated rootless namespace.
+    # UPDATE (SSL Bypass): Added --trusted-host flags to prevent certificate verification failures.
     # UPDATE (Dependency Routing): Added 'numpy' to silence PyTorch initialization warnings.
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf && python src/server.py"
     ports:
@@ -30,7 +29,6 @@ services:
     volumes:
       - .:/app
       # UPDATE (NixOS Specific): Mount the host's hardware-bound driver libraries directly.
-      # This bypasses the broken CDI generator by supplying the libcuda.so.1 library manually.
       - /run/opengl-driver/lib:/usr/lib/nvidia:ro
     environment:
       # UPDATE (Linker Injection): Instruct the isolated container's linker where to find the newly mounted drivers.
@@ -40,18 +38,13 @@ services:
       - SERVER_ADDR=server:50052
     working_dir: /app
     
-    # We must explicitly request the NVIDIA container toolkit capabilities here
-    # UPDATE (Hardware Mapping): The original 'deploy: resources' CDI block caused a SIGABRT
-    # due to the unique NixOS filesystem structure. We have replaced it by explicitly mapping
-    # the exact kernel character devices required for parallel CUDA execution.
+    # UPDATE (Hardware Mapping): Explicitly mapping the exact kernel character devices required for parallel CUDA execution.
     devices:
       - /dev/nvidia0:/dev/nvidia0
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia-uvm:/dev/nvidia-uvm
       - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
       
-    # UPDATE (SSL Bypass): Synchronized the --trusted-host flags for the client node as well.
-    # UPDATE (Dependency Routing): Added 'numpy' to silence PyTorch initialization warnings.
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf && sleep 5 && python src/client.py"
     networks:
       - federated_network
@@ -61,38 +54,36 @@ services:
   # ---------------------------------------------------------
   # CLIENT 2 (Edge Compute): Bound to AMD Radeon 890M (ROCm)
   # ---------------------------------------------------------
-  # NEW: Added second client to simulate a heterogeneous multi-vendor network.
   client_belur_02:
     image: docker.io/library/python:3.11-slim
     container_name: fl_client_node_2
     volumes:
       - .:/app
     environment:
-      # NEW (Hardware Spoof): Force ROCm compiler to treat the unsupported integrated 890M (RDNA 3.5)
-      # as a supported gfx1100 architecture.
+      # NEW (Hardware Spoof): Force ROCm compiler to treat the unsupported integrated 890M as a supported gfx1100.
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
-      # NEW (Dynamic Variables): Inject unique network identity for AMD node.
       - CLIENT_ID=node_belur_02_Radeon890M
       - SERVER_ADDR=server:50052
     working_dir: /app
     
-    # UPDATE (ROCm Security Bypass): AMD compiles 'libamdhip64.so' requesting an executable stack.
+    # =========================================================================
+    # CRITICAL UPDATE: THE ROCM SECURITY BYPASS
+    # =========================================================================
+    # AMD compiles 'libamdhip64.so' requesting an executable stack (PT_GNU_STACK).
     # Podman's default seccomp profile violently blocks this to prevent buffer overflows.
-    # We must explicitly unconfine the seccomp profile to allow ROCm to initialize in memory.
+    # We explicitly unconfine the profile to allow ROCm to initialize in memory.
     security_opt:
       - seccomp=unconfined
-    # UPDATE (Inter-Process Communication): ROCm tensor operations heavily utilize shared memory.
+    # ROCm tensor operations heavily utilize shared memory architectures.
     ipc: host
+    # =========================================================================
 
     devices:
       # NEW (AMD Hardware Mapping): Expose the native Linux Kernel Fusion Driver and Direct Rendering Infrastructure.
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
-    # NEW (PyTorch ROCm Wheel): Explicitly override the default pip index to fetch the massive 
-    # AMD-compiled PyTorch binaries. Sleep stagger set to 15s to account for large download times.
-    # Included --trusted-host for download.pytorch.org to bypass SSL isolation restrictions.
-    # UPDATE (Dependency Routing): Split the pip command into two distinct phases. 
-    # Phase 1 pulls standard packages from PyPI (numpy, grpcio). Phase 2 strictly pulls ROCm binaries from AMD.
+      
+    # NEW (Dependency Routing): Split the pip command to ensure network libraries are fetched before overriding the AMD index.
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && sleep 15 && python src/client.py"
     networks:
       - federated_network
