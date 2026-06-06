@@ -75,6 +75,15 @@ services:
       - CLIENT_ID=node_belur_02_Radeon890M
       - SERVER_ADDR=server:50052
     working_dir: /app
+    
+    # UPDATE (ROCm Security Bypass): AMD compiles 'libamdhip64.so' requesting an executable stack.
+    # Podman's default seccomp profile violently blocks this to prevent buffer overflows.
+    # We must explicitly unconfine the seccomp profile to allow ROCm to initialize in memory.
+    security_opt:
+      - seccomp=unconfined
+    # UPDATE (Inter-Process Communication): ROCm tensor operations heavily utilize shared memory.
+    ipc: host
+
     devices:
       # NEW (AMD Hardware Mapping): Expose the native Linux Kernel Fusion Driver and Direct Rendering Infrastructure.
       - /dev/kfd:/dev/kfd
