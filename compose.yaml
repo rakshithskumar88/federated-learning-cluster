@@ -10,10 +10,10 @@ services:
     container_name: fl_aggregator_node
     volumes:
       - .:/app
+    environment:
+      # NEW (Logging): Force Python to instantly stream outputs to the Podman console
+      - PYTHONUNBUFFERED=1
     working_dir: /app
-    # Execute our CPU-bound averaging logic
-    # UPDATE (SSL Bypass): Added --trusted-host flags to prevent certificate verification failures.
-    # UPDATE (Dependency Routing): Added 'numpy' to silence PyTorch initialization warnings.
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf && python src/server.py"
     ports:
       - "50052:50052"
@@ -28,31 +28,19 @@ services:
     container_name: fl_client_node_1
     volumes:
       - .:/app
-      # UPDATE (NixOS Specific): Mount the host's hardware-bound driver libraries directly.
       - /run/opengl-driver/lib:/usr/lib/nvidia:ro
-      # =========================================================================
-      # CRITICAL UPDATE: THE NIXOS SYMLINK TRAP
-      # =========================================================================
-      # /run/opengl-driver/lib contains symlinks pointing to /nix/store/...
-      # By mounting the Nix store read-only, we ensure the container can traverse
-      # the symlinks and actually locate libcuda.so.1. Without this, PyTorch silently
-      # falls back to the CPU because the driver files appear as broken links.
       - /nix/store:/nix/store:ro
     environment:
-      # UPDATE (Linker Injection): Instruct the isolated container's linker where to find the newly mounted drivers.
       - LD_LIBRARY_PATH=/usr/lib/nvidia
-      # NEW (Dynamic Variables): Inject unique network identities for the Python script.
       - CLIENT_ID=node_sahakarnagar_01_RTX4070
       - SERVER_ADDR=server:50052
+      - PYTHONUNBUFFERED=1
     working_dir: /app
-    
-    # UPDATE (Hardware Mapping): Explicitly mapping the exact kernel character devices required for parallel CUDA execution.
     devices:
       - /dev/nvidia0:/dev/nvidia0
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia-uvm:/dev/nvidia-uvm
       - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
-      
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf && sleep 5 && python src/client.py"
     networks:
       - federated_network
@@ -68,43 +56,34 @@ services:
     volumes:
       - .:/app
     environment:
-      # NEW (Hardware Spoof): Force ROCm compiler to treat the unsupported integrated 890M as a supported gfx1100.
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
       - CLIENT_ID=node_belur_02_Radeon890M
       - SERVER_ADDR=server:50052
+      - PYTHONUNBUFFERED=1
     working_dir: /app
-    
-    # =========================================================================
-    # ULTIMATE SECURITY OVERRIDE (Privileged Escalation)
-    # =========================================================================
-    # UPDATE (Privileged Bypass): While we previously tried unconfining seccomp,
-    # podman-compose sometimes fails to translate that flag to the Podman daemon.
-    # By escalating the entire container to privileged mode, we force the kernel
-    # to drop all namespace security restrictions.
     privileged: true
-    # ROCm tensor operations heavily utilize shared memory architectures.
     ipc: host
-    # =========================================================================
-
     devices:
-      # NEW (AMD Hardware Mapping): Expose the native Linux Kernel Fusion Driver and Direct Rendering Infrastructure.
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
       
-    # =========================================================================
-    # CRITICAL UPDATE: THE ELF BINARY PATCH (MODERN DEBIAN FIX)
-    # =========================================================================
-    # 'execstack' was completely removed from Debian after version 10 (Buster). 
-    # We now use the modern standard 'patchelf' (native to Trixie) to dynamically
-    # strip the PT_GNU_STACK flag from both 'libamdhip64.so' and 'libhiprtc.so'
-    # immediately after pip downloads them.
-    command: bash -c "apt-get update && apt-get install -y patchelf && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && sleep 15 && python src/client.py"
+    # UPDATE (Visibility): Added explicit echo statements so the terminal reports the patching 
+    # and sleeping progress instead of hanging silently.
+    command: >
+      bash -c "apt-get update && apt-get install -y patchelf && 
+      pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && 
+      pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && 
+      echo '[SYSTEM] Scanning and patching ROCm binaries with patchelf...' && 
+      find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && 
+      find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
+      echo '[SYSTEM] Patch complete. Staggering connection (15s)...' && 
+      sleep 15 && 
+      python src/client.py"
     networks:
       - federated_network
     depends_on:
       - server
 
 networks:
-  # Create a dedicated, isolated software-defined network for our nodes
   federated_network:
     driver: bridge
