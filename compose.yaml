@@ -67,13 +67,14 @@ services:
     working_dir: /app
     
     # =========================================================================
-    # CRITICAL UPDATE: THE ROCM SECURITY BYPASS
+    # ULTIMATE SECURITY OVERRIDE (Privileged Escalation)
     # =========================================================================
-    # AMD compiles 'libamdhip64.so' requesting an executable stack (PT_GNU_STACK).
-    # Podman's default seccomp profile violently blocks this to prevent buffer overflows.
-    # We explicitly unconfine the profile to allow ROCm to initialize in memory.
-    security_opt:
-      - seccomp=unconfined
+    # UPDATE (Privileged Bypass): While we previously tried unconfining seccomp,
+    # podman-compose sometimes fails to translate that flag to the Podman daemon.
+    # By escalating the entire container to privileged mode, we force the kernel
+    # to drop all namespace security restrictions, allowing the AMD ROCm library
+    # to initialize its executable memory stack (PT_GNU_STACK) without EPERM faults.
+    privileged: true
     # ROCm tensor operations heavily utilize shared memory architectures.
     ipc: host
     # =========================================================================
