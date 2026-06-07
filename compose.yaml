@@ -30,6 +30,14 @@ services:
       - .:/app
       # UPDATE (NixOS Specific): Mount the host's hardware-bound driver libraries directly.
       - /run/opengl-driver/lib:/usr/lib/nvidia:ro
+      # =========================================================================
+      # CRITICAL UPDATE: THE NIXOS SYMLINK TRAP
+      # =========================================================================
+      # /run/opengl-driver/lib contains symlinks pointing to /nix/store/...
+      # By mounting the Nix store read-only, we ensure the container can traverse
+      # the symlinks and actually locate libcuda.so.1. Without this, PyTorch silently
+      # falls back to the CPU because the driver files appear as broken links.
+      - /nix/store:/nix/store:ro
     environment:
       # UPDATE (Linker Injection): Instruct the isolated container's linker where to find the newly mounted drivers.
       - LD_LIBRARY_PATH=/usr/lib/nvidia
@@ -72,8 +80,7 @@ services:
     # UPDATE (Privileged Bypass): While we previously tried unconfining seccomp,
     # podman-compose sometimes fails to translate that flag to the Podman daemon.
     # By escalating the entire container to privileged mode, we force the kernel
-    # to drop all namespace security restrictions, allowing the AMD ROCm library
-    # to initialize its executable memory stack (PT_GNU_STACK) without EPERM faults.
+    # to drop all namespace security restrictions.
     privileged: true
     # ROCm tensor operations heavily utilize shared memory architectures.
     ipc: host
@@ -84,8 +91,15 @@ services:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
       
+    # =========================================================================
+    # CRITICAL UPDATE: THE ELF BINARY PATCH
+    # =========================================================================
+    # The NixOS host kernel is strictly enforcing memory protections, overriding
+    # the container's privileged request. We bypass this by surgically altering 
+    # the AMD library itself. We install 'execstack' and dynamically strip the 
+    # PT_GNU_STACK flag from libamdhip64.so immediately after pip downloads it.
     # NEW (Dependency Routing): Split the pip command to ensure network libraries are fetched before overriding the AMD index.
-    command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && sleep 15 && python src/client.py"
+    command: bash -c "apt-get update && apt-get install -y execstack && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec execstack -c {} + && sleep 15 && python src/client.py"
     networks:
       - federated_network
     depends_on:
