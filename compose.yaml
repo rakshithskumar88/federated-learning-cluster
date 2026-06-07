@@ -92,12 +92,13 @@ services:
       - /dev/dri:/dev/dri
       
     # =========================================================================
-    # CRITICAL UPDATE: THE LEGACY REPOSITORY BYPASS
+    # CRITICAL UPDATE: THE ELF BINARY PATCH (MODERN DEBIAN FIX)
     # =========================================================================
-    # Debian Trixie completely removed 'execstack'. We dynamically inject the Debian 
-    # Bullseye legacy repository to fetch the deprecated tool, patch the massive 
-    # ROCm binary to strip its PT_GNU_STACK flag, and proceed with execution.
-    command: bash -c "echo 'deb http://deb.debian.org/debian bullseye main' >> /etc/apt/sources.list && apt-get update && apt-get install -y execstack && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec execstack -c {} + && sleep 15 && python src/client.py"
+    # 'execstack' was completely removed from Debian after version 10 (Buster). 
+    # We now use the modern standard 'patchelf' (native to Trixie) to dynamically
+    # strip the PT_GNU_STACK flag from both 'libamdhip64.so' and 'libhiprtc.so'
+    # immediately after pip downloads them.
+    command: bash -c "apt-get update && apt-get install -y patchelf && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && sleep 15 && python src/client.py"
     networks:
       - federated_network
     depends_on:
