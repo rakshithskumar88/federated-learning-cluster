@@ -92,14 +92,12 @@ services:
       - /dev/dri:/dev/dri
       
     # =========================================================================
-    # CRITICAL UPDATE: THE ELF BINARY PATCH
+    # CRITICAL UPDATE: THE LEGACY REPOSITORY BYPASS
     # =========================================================================
-    # The NixOS host kernel is strictly enforcing memory protections, overriding
-    # the container's privileged request. We bypass this by surgically altering 
-    # the AMD library itself. We install 'execstack' and dynamically strip the 
-    # PT_GNU_STACK flag from libamdhip64.so immediately after pip downloads it.
-    # NEW (Dependency Routing): Split the pip command to ensure network libraries are fetched before overriding the AMD index.
-    command: bash -c "apt-get update && apt-get install -y execstack && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec execstack -c {} + && sleep 15 && python src/client.py"
+    # Debian Trixie completely removed 'execstack'. We dynamically inject the Debian 
+    # Bullseye legacy repository to fetch the deprecated tool, patch the massive 
+    # ROCm binary to strip its PT_GNU_STACK flag, and proceed with execution.
+    command: bash -c "echo 'deb http://deb.debian.org/debian bullseye main' >> /etc/apt/sources.list && apt-get update && apt-get install -y execstack && pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && find /usr/local -name 'libamdhip64.so' -exec execstack -c {} + && sleep 15 && python src/client.py"
     networks:
       - federated_network
     depends_on:
