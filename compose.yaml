@@ -59,13 +59,7 @@ services:
       - CLIENT_ID=node_belur_02_Radeon890M
       - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
-      # =========================================================================
-      # APU DEADLOCK FIX & HARDWARE TELEMETRY
-      # =========================================================================
-      - HSA_ENABLE_SDMA=0       # Prevents PCIe bus deadlocks on shared-memory APUs
-      - AMD_LOG_LEVEL=3         # Forces the C++ HIP runtime to dump initialization logs
-      - HSAKMT_DEBUG_LEVEL=4    # Forces the Linux Kernel driver to dump memory mapping logs
-      # =========================================================================
+      - HSA_ENABLE_SDMA=0
     working_dir: /app
     privileged: true
     ipc: host
@@ -73,17 +67,22 @@ services:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
       
-    # UPDATE: Added 'libnuma1' to resolve core memory allocation mapping for ROCm on Debian
+    # =========================================================================
+    # DIAGNOSTIC UPDATE: SYSTEM CALL TRACER (STRACE)
+    # =========================================================================
+    # Replaced 'sleep' with 'strace -f'. This will print thousands of lines of 
+    # C/C++ execution logs directly to the terminal and save a copy to your 
+    # host folder at /app/strace_output.log. When it freezes, the last line 
+    # is our smoking gun.
     command: >
-      bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
+      bash -c "apt-get update && apt-get install -y patchelf libnuma1 strace && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && 
       pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && 
       echo '[SYSTEM] Scanning and patching ROCm binaries with patchelf...' && 
       find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && 
       find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
-      echo '[SYSTEM] Patch complete. Staggering connection (5s)...' && 
-      sleep 5 && 
-      python src/client.py"
+      echo '[SYSTEM] Patch complete. Engaging System Trace...' && 
+      strace -f python src/client.py 2>&1 | tee strace_output.log"
     networks:
       - federated_network
     depends_on:
