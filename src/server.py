@@ -6,7 +6,6 @@ import io
 import sys
 import os
 
-# Ensure Python can locate our newly generated network classes
 sys.path.append(os.path.join(os.path.dirname(__file__), 'generated'))
 import federated_pb2
 import federated_pb2_grpc
@@ -14,68 +13,68 @@ import federated_pb2_grpc
 class FederatedServer(federated_pb2_grpc.FederatedLearningServicer):
     def __init__(self):
         self.current_round = 1
-        
-        # ---------------------------------------------------------
-        # MATHEMATICAL STATE: The "Global Brain"
-        # ---------------------------------------------------------
-        # We initialize a 'blank' PyTorch Tensor. 
-        # A Tensor is just a highly optimized matrix of numbers.
-        # For this skeleton, we assume our AI has 3 parameters (weights).
         self.global_weights = {'layer_1': torch.tensor([0.0, 0.0, 0.0])}
+        
+        # NEW: State management for the FedAvg Algorithm
+        self.expected_clients = 2
+        self.client_updates = []
         
         print("[INIT] Central Aggregator initialized. Math State: Blank.")
 
-    # ---------------------------------------------------------
-    # RPC ENDPOINT 1: Broadcast to Clients
-    # ---------------------------------------------------------
     def GetGlobalModel(self, request, context):
         print(f"[RPC] Node {request.client_id} requested the global model.")
-        
-        # We cannot send a PyTorch Tensor directly over standard network sockets.
-        # We must serialize the mathematical matrix into raw bytes.
         buffer = io.BytesIO()
         torch.save(self.global_weights, buffer)
-        
-        # Wrap the bytes in our strict gRPC Protocol Buffer contract
         return federated_pb2.GlobalModel(
             round_number=self.current_round,
             model_weights=buffer.getvalue()
         )
 
-    # ---------------------------------------------------------
-    # RPC ENDPOINT 2: Receive Client Gradients
-    # ---------------------------------------------------------
     def SendLocalUpdate(self, request, context):
-        # 1. Network to Math Translation
-        # Convert the incoming byte stream back into a PyTorch mathematical matrix
         buffer = io.BytesIO(request.model_weights)
         client_weights = torch.load(buffer, weights_only=True)
-        
-        # 2. Extract Mathematical Weighting
-        # n_k = How many data samples this specific node used
         n_k = request.data_size 
         
         print(f"[RPC] Received payload from {request.client_id}. Data points used: {n_k}")
-        print(f"[MATH] Node Payload Tensors: {client_weights}")
+        print(f"[MATH] Node Payload Tensors: {client_weights['layer_1'].numpy()}")
 
-        # Note: The actual Federated Averaging loop (multiplying these weights by n_k) 
-        # will be implemented here once we have multiple clients sending data.
+        # NEW: Store the incoming weights until all expected clients report in
+        self.client_updates.append((n_k, client_weights))
         
+        # If both the NVIDIA and AMD nodes have reported, run the math!
+        if len(self.client_updates) == self.expected_clients:
+            self._aggregate_models()
+            
         return federated_pb2.UpdateAck(success=True, message="Mathematical payload integrated.")
 
-# ---------------------------------------------------------
-# INFRASTRUCTURE DEPLOYMENT
-# ---------------------------------------------------------
+    def _aggregate_models(self):
+        print("\n========================================================")
+        print(f"[FED-AVG] Initiating Federated Averaging for Round {self.current_round}...")
+        
+        # Calculate N (Total data points across all clients)
+        total_n = sum([n_k for n_k, _ in self.client_updates])
+        
+        # Create a blank slate for the new global brain
+        new_global = {'layer_1': torch.zeros_like(self.global_weights['layer_1'])}
+        
+        # The FedAvg Calculus: Multiply each client's weight by its data fraction (n_k / N)
+        for n_k, client_weights in self.client_updates:
+            weight_fraction = n_k / total_n
+            new_global['layer_1'] += client_weights['layer_1'] * weight_fraction
+            
+        self.global_weights = new_global
+        print(f"[FED-AVG] Aggregation Complete! New Global Brain: {self.global_weights['layer_1'].numpy()}")
+        print("========================================================\n")
+        
+        # Reset for the next round
+        self.current_round += 1
+        self.client_updates = []
+
 def serve():
-    # Define a threaded server capable of handling multiple remote nodes simultaneously
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     federated_pb2_grpc.add_FederatedLearningServicer_to_server(FederatedServer(), server)
-    
-    # Bind to all IPv4 and IPv6 interfaces on port 50052
-    # This prepares the server to be mapped inside our Podman container later
     server.add_insecure_port('[::]:50052')
     server.start()
-    
     print("========================================================")
     print(" Global Aggregator Active (CPU-Bound execution)")
     print(" Listening on [::]:50052 for mathematical payloads...")
