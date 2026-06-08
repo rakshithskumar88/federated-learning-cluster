@@ -11,7 +11,6 @@ services:
     volumes:
       - .:/app
     environment:
-      # NEW (Logging): Force Python to instantly stream outputs to the Podman console
       - PYTHONUNBUFFERED=1
     working_dir: /app
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf && python src/server.py"
@@ -60,6 +59,12 @@ services:
       - CLIENT_ID=node_belur_02_Radeon890M
       - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
+      # =========================================================================
+      # CRITICAL UPDATE: APU DEADLOCK BYPASS
+      # =========================================================================
+      # Disables the SDMA engine. APUs share physical RAM with the CPU, and 
+      # allowing containerized ROCm to use SDMA causes silent PCI bus deadlocks.
+      - HSA_ENABLE_SDMA=0
     working_dir: /app
     privileged: true
     ipc: host
@@ -67,10 +72,10 @@ services:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
       
-    # UPDATE (Visibility): Added explicit echo statements so the terminal reports the patching 
-    # and sleeping progress instead of hanging silently.
+    # UPDATE (Dependency Routing): Added `libnuma1` to the apt-get install phase 
+    # to ensure the HSA runtime can correctly map APU memory nodes.
     command: >
-      bash -c "apt-get update && apt-get install -y patchelf && 
+      bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && 
       pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && 
       echo '[SYSTEM] Scanning and patching ROCm binaries with patchelf...' && 
