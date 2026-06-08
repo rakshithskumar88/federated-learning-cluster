@@ -1,25 +1,30 @@
 # src/client.py
-import grpc
-import torch
-import io
-import sys
 import os
+import sys
 
-# Ensure Python can locate our generated network classes
+print("[BOOT: 1/5] Python initialized inside container.", flush=True)
+CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
+SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
+
+print("[BOOT: 2/5] Loading IO streams...", flush=True)
+import io
+
+print("[BOOT: 3/5] Loading network protocols (gRPC)...", flush=True)
+import grpc
+
+print("[BOOT: 4/5] Loading Machine Learning engine (PyTorch)... *IF IT HANGS HERE, ROCM C++ IS DEADLOCKED*", flush=True)
+import torch
+
+print("[BOOT: 5/5] PyTorch loaded successfully! Verifying generated gRPC classes...", flush=True)
 sys.path.append(os.path.join(os.path.dirname(__file__), 'generated'))
 import federated_pb2
 import federated_pb2_grpc
-
-# NEW (Dynamic Variables): Dynamically read infrastructure variables injected by Podman Compose
-# This prevents rootless namespace collisions by avoiding 'localhost'
-CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
-SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
 
 def train_local_model(global_weights, data_size=100, learning_rate=0.1):
     print("\n[COMPUTE] Moving weights to parallel execution space...")
     
     # ---------------------------------------------------------
-    # HARDWARE ALLOCATION: Binding to NVIDIA RTX 4070 CUDA
+    # HARDWARE ALLOCATION: Binding to Compute Target
     # ---------------------------------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[HARDWARE] Active Compute Target: {device.type.upper()}")
@@ -33,7 +38,6 @@ def train_local_model(global_weights, data_size=100, learning_rate=0.1):
     print(f"[MATH] Initial Local Tensors in VRAM: {local_weights.cpu().numpy()}")
     
     # Simulate turning the mathematical knobs based on local private data
-    # We create a mock gradient (direction of optimization)
     mock_gradient = torch.tensor([-0.5, 1.2, -0.3]).to(device)
     
     # Formula: local_weight = local_weight - (learning_rate * gradient)
@@ -46,14 +50,12 @@ def train_local_model(global_weights, data_size=100, learning_rate=0.1):
 
 def run_client():
     # Establish high-speed TCP socket connection to our Aggregator Server
-    # UPDATE: Utilizing dynamic SERVER_ADDR injected via Podman network bridge
     print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server at {SERVER_ADDR}...")
     with grpc.insecure_channel(SERVER_ADDR) as channel:
         stub = federated_pb2_grpc.FederatedLearningStub(channel)
         
         # 1. Request the latest global model from the server
         print("[RPC] Pulling global model state...")
-        # UPDATE: Utilizing dynamic CLIENT_ID
         request = federated_pb2.ModelRequest(client_id=CLIENT_ID)
         global_model_response = stub.GetGlobalModel(request)
         
@@ -75,7 +77,6 @@ def run_client():
         
         # 4. Beam the mathematical updates back to the server contract
         print("[RPC] Streaming local mathematical adjustments back to server...")
-        # UPDATE: Utilizing dynamic CLIENT_ID
         update_payload = federated_pb2.LocalUpdate(
             client_id=CLIENT_ID,
             data_size=local_n,

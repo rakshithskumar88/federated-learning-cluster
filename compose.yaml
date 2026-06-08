@@ -60,11 +60,12 @@ services:
       - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
       # =========================================================================
-      # CRITICAL UPDATE: APU DEADLOCK BYPASS
+      # APU DEADLOCK FIX & HARDWARE TELEMETRY
       # =========================================================================
-      # Disables the SDMA engine. APUs share physical RAM with the CPU, and 
-      # allowing containerized ROCm to use SDMA causes silent PCI bus deadlocks.
-      - HSA_ENABLE_SDMA=0
+      - HSA_ENABLE_SDMA=0       # Prevents PCIe bus deadlocks on shared-memory APUs
+      - AMD_LOG_LEVEL=3         # Forces the C++ HIP runtime to dump initialization logs
+      - HSAKMT_DEBUG_LEVEL=4    # Forces the Linux Kernel driver to dump memory mapping logs
+      # =========================================================================
     working_dir: /app
     privileged: true
     ipc: host
@@ -72,8 +73,7 @@ services:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
       
-    # UPDATE (Dependency Routing): Added `libnuma1` to the apt-get install phase 
-    # to ensure the HSA runtime can correctly map APU memory nodes.
+    # UPDATE: Added 'libnuma1' to resolve core memory allocation mapping for ROCm on Debian
     command: >
       bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf && 
@@ -81,8 +81,8 @@ services:
       echo '[SYSTEM] Scanning and patching ROCm binaries with patchelf...' && 
       find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && 
       find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
-      echo '[SYSTEM] Patch complete. Staggering connection (15s)...' && 
-      sleep 15 && 
+      echo '[SYSTEM] Patch complete. Staggering connection (5s)...' && 
+      sleep 5 && 
       python src/client.py"
     networks:
       - federated_network
