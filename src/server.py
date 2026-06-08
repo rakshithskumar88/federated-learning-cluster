@@ -11,13 +11,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'generated'))
 import federated_pb2
 import federated_pb2_grpc
 
-# ---------------------------------------------------------
-# THE NEURAL NETWORK ARCHITECTURE
-# ---------------------------------------------------------
 class FraudNet(nn.Module):
     def __init__(self):
         super(FraudNet, self).__init__()
-        # 30 input features from the Hugging Face Fraud Dataset (V1-V28, Time, Amount)
         self.fc1 = nn.Linear(30, 64)
         self.relu1 = nn.ReLU()
         self.fc2 = nn.Linear(64, 32)
@@ -39,14 +35,12 @@ class FederatedServer(federated_pb2_grpc.FederatedLearningServicer):
         self.expected_clients = 2
         self.client_updates = []
         
-        # Initialize the Global Brain
         self.global_model = FraudNet()
         print("[INIT] Central Aggregator initialized. Global FraudNet Model created.")
 
     def GetGlobalModel(self, request, context):
         print(f"[RPC] Node {request.client_id} requested the global model.")
         buffer = io.BytesIO()
-        # Serialize the entire neural network state dictionary
         torch.save(self.global_model.state_dict(), buffer)
         return federated_pb2.GlobalModel(
             round_number=self.current_round,
@@ -72,18 +66,15 @@ class FederatedServer(federated_pb2_grpc.FederatedLearningServicer):
         
         total_n = sum([n_k for n_k, _ in self.client_updates])
         
-        # Create a blank state dictionary based on the model structure
         new_state_dict = self.global_model.state_dict()
         for key in new_state_dict.keys():
             new_state_dict[key] = torch.zeros_like(new_state_dict[key], dtype=torch.float32)
         
-        # FedAvg: Weighted average of all neural network layers
         for n_k, client_state_dict in self.client_updates:
             weight_fraction = n_k / total_n
             for key in new_state_dict.keys():
                 new_state_dict[key] += client_state_dict[key] * weight_fraction
                 
-        # Load the newly averaged knowledge back into the global model
         self.global_model.load_state_dict(new_state_dict)
         print(f"[FED-AVG] Aggregation Complete! Global FraudNet is now smarter.")
         print("========================================================\n")

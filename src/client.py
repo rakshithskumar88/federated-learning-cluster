@@ -15,10 +15,11 @@ import federated_pb2
 import federated_pb2_grpc
 
 CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
-SERVER_ADDR = os.getenv("SERVER_ADDR", "127.0.0.1:50052")
+# CRITICAL FIX: Default to 'server:50052' for standard bridge networks
+SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
 
 # ---------------------------------------------------------
-# IDENTICAL NEURAL NETWORK ARCHITECTURE
+# NEURAL NETWORK ARCHITECTURE
 # ---------------------------------------------------------
 class FraudNet(nn.Module):
     def __init__(self):
@@ -43,14 +44,13 @@ class FraudNet(nn.Module):
 # ---------------------------------------------------------
 def fetch_and_prep_data():
     print(f"[DATA] {CLIENT_ID} connecting to Hugging Face Datasets...")
-    # Fetching the real-world Credit Card Fraud dataset
     hf_dataset = load_dataset("jyunyilin/credit-card-fraud-detection", split="train")
     df = hf_dataset.to_pandas()
     
-    # We take a sample so the GPUs don't take hours to train
+    # We take a sample to accelerate the demonstration
     df = df.sample(n=2000, random_state=42)
     
-    # Simulating the Data Privacy Split (Bank A vs Bank B)
+    # Simulating Data Privacy Split (Bank A vs Bank B)
     if "RTX4070" in CLIENT_ID:
         df = df.iloc[:1000] # NVIDIA takes the first 1000 transactions
     else:
@@ -59,11 +59,9 @@ def fetch_and_prep_data():
     X = df.drop(columns=['Class']).values
     y = df['Class'].values.reshape(-1, 1)
 
-    # Normalize the financial parameters
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
 
-    # Convert to PyTorch Tensors
     X_tensor = torch.tensor(X, dtype=torch.float32)
     y_tensor = torch.tensor(y, dtype=torch.float32)
     
@@ -76,7 +74,6 @@ def train_local_model(global_state_dict):
     X_train, y_train = fetch_and_prep_data()
     X_train, y_train = X_train.to(device), y_train.to(device)
     
-    # Initialize model and inject the Global Brain from the Server
     model = FraudNet().to(device)
     model.load_state_dict(global_state_dict)
     
@@ -97,12 +94,11 @@ def train_local_model(global_state_dict):
     
     print("[TRAINING] Deep Learning complete. Extracting optimized network weights.")
     
-    # Return the newly optimized state dict to the CPU memory
     model.to("cpu")
     return model.state_dict(), len(X_train)
 
 def run_client():
-    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server...")
+    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server at {SERVER_ADDR}...")
     with grpc.insecure_channel(SERVER_ADDR) as channel:
         stub = federated_pb2_grpc.FederatedLearningStub(channel)
         
@@ -112,7 +108,6 @@ def run_client():
         buffer = io.BytesIO(global_model_response.model_weights)
         global_state_dict = torch.load(buffer, weights_only=True)
         
-        # Trigger actual Deep Learning on the GPU
         optimized_state_dict, local_n = train_local_model(global_state_dict)
         
         out_buffer = io.BytesIO()

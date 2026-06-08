@@ -3,29 +3,28 @@ version: '3.8'
 
 services:
   # ---------------------------------------------------------
-  # THE AGGREGATOR: Bound to the host CPU (No GPU access)
+  # THE AGGREGATOR (FRAUDNET SERVER)
   # ---------------------------------------------------------
   server:
     image: docker.io/library/python:3.11-slim
     container_name: fl_aggregator_node
-    # FIX: Bypass bridge-and-NAT to prevent Podman from hijacking host internet routing
-    network_mode: host
     volumes:
       - .:/app
     environment:
       - PYTHONUNBUFFERED=1
     working_dir: /app
-    # UPDATE: Added datasets, pandas, and scikit-learn for Hugging Face data processing
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && python src/server.py"
+    ports:
+      - "50052:50052"
+    networks:
+      - federated_network
 
   # ---------------------------------------------------------
-  # CLIENT 1: Bound explicitly to your NVIDIA RTX 4070
+  # CLIENT 1 (NVIDIA RTX 4070 - BANK A)
   # ---------------------------------------------------------
   client_sahakarnagar_01:
     image: docker.io/library/python:3.11-slim
     container_name: fl_client_node_1
-    # FIX: Bypass bridge-and-NAT to prevent Podman from hijacking host internet routing
-    network_mode: host
     volumes:
       - .:/app
       - /run/opengl-driver/lib:/usr/lib/nvidia:ro
@@ -33,8 +32,8 @@ services:
     environment:
       - LD_LIBRARY_PATH=/usr/lib/nvidia
       - CLIENT_ID=node_sahakarnagar_01_RTX4070
-      # MUST point to localhost due to network_mode: host sharing the local loopback
-      - SERVER_ADDR=127.0.0.1:50052
+      # CRITICAL: Pointing to the bridge network DNS name, NOT localhost
+      - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
     working_dir: /app
     devices:
@@ -42,26 +41,26 @@ services:
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia-uvm:/dev/nvidia-uvm
       - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
-    # UPDATE: Added datasets, pandas, and scikit-learn for Hugging Face data processing
     command: bash -c "pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org torch numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && sleep 5 && python src/client.py"
+    networks:
+      - federated_network
+    depends_on:
+      - server
 
   # ---------------------------------------------------------
-  # CLIENT 2 (Edge Compute): Bound to AMD Radeon 890M (ROCm)
+  # CLIENT 2 (AMD RADEON 890M - BANK B)
   # ---------------------------------------------------------
   client_belur_02:
     image: docker.io/library/python:3.11-slim
     container_name: fl_client_node_2
-    # FIX: Bypass bridge-and-NAT to prevent Podman from hijacking host internet routing
-    network_mode: host
     volumes:
       - .:/app
     environment:
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
       - CLIENT_ID=node_belur_02_Radeon890M
-      # MUST point to localhost due to network_mode: host sharing the local loopback
-      - SERVER_ADDR=127.0.0.1:50052
+      # CRITICAL: Pointing to the bridge network DNS name, NOT localhost
+      - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
-      # APU DEADLOCK FIX: Prevents PCIe bus deadlocks on shared-memory APUs
       - HSA_ENABLE_SDMA=0
     working_dir: /app
     privileged: true
@@ -69,8 +68,6 @@ services:
     devices:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
-      
-    # UPDATE: Added libnuma1 and Data Science libraries (datasets, pandas, scikit-learn)
     command: >
       bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && 
@@ -81,3 +78,11 @@ services:
       echo '[SYSTEM] Patch complete. Booting Deep Learning Pipeline...' && 
       sleep 10 && 
       python src/client.py"
+    networks:
+      - federated_network
+    depends_on:
+      - server
+
+networks:
+  federated_network:
+    driver: bridge
