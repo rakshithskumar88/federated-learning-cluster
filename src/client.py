@@ -1,82 +1,124 @@
 # src/client.py
 import os
 import sys
-
-print("[BOOT: 1/5] Python initialized inside container.", flush=True)
-CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
-SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
-
-print("[BOOT: 2/5] Loading IO streams...", flush=True)
 import io
-
-print("[BOOT: 3/5] Loading network protocols (gRPC)...", flush=True)
 import grpc
-
-print("[BOOT: 4/5] Loading Machine Learning engine (PyTorch)... *IF IT HANGS HERE, ROCM C++ IS DEADLOCKED*", flush=True)
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from datasets import load_dataset
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
-print("[BOOT: 5/5] PyTorch loaded successfully! Verifying generated gRPC classes...", flush=True)
 sys.path.append(os.path.join(os.path.dirname(__file__), 'generated'))
 import federated_pb2
 import federated_pb2_grpc
 
-def train_local_model(global_weights, data_size=100, learning_rate=0.1):
-    print("\n[COMPUTE] Moving weights to parallel execution space...")
+CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
+SERVER_ADDR = os.getenv("SERVER_ADDR", "127.0.0.1:50052")
+
+# ---------------------------------------------------------
+# IDENTICAL NEURAL NETWORK ARCHITECTURE
+# ---------------------------------------------------------
+class FraudNet(nn.Module):
+    def __init__(self):
+        super(FraudNet, self).__init__()
+        self.fc1 = nn.Linear(30, 64)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(64, 32)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(32, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu1(out)
+        out = self.fc2(out)
+        out = self.relu2(out)
+        out = self.fc3(out)
+        return self.sigmoid(out)
+
+# ---------------------------------------------------------
+# DATA PIPELINE: Pulling from Hugging Face
+# ---------------------------------------------------------
+def fetch_and_prep_data():
+    print(f"[DATA] {CLIENT_ID} connecting to Hugging Face Datasets...")
+    # Fetching the real-world Credit Card Fraud dataset
+    hf_dataset = load_dataset("jyunyilin/credit-card-fraud-detection", split="train")
+    df = hf_dataset.to_pandas()
     
-    # ---------------------------------------------------------
-    # HARDWARE ALLOCATION: Binding to Compute Target
-    # ---------------------------------------------------------
+    # We take a sample so the GPUs don't take hours to train
+    df = df.sample(n=2000, random_state=42)
+    
+    # Simulating the Data Privacy Split (Bank A vs Bank B)
+    if "RTX4070" in CLIENT_ID:
+        df = df.iloc[:1000] # NVIDIA takes the first 1000 transactions
+    else:
+        df = df.iloc[1000:] # AMD takes the next 1000 transactions
+
+    X = df.drop(columns=['Class']).values
+    y = df['Class'].values.reshape(-1, 1)
+
+    # Normalize the financial parameters
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+
+    # Convert to PyTorch Tensors
+    X_tensor = torch.tensor(X, dtype=torch.float32)
+    y_tensor = torch.tensor(y, dtype=torch.float32)
+    
+    return X_tensor, y_tensor
+
+def train_local_model(global_state_dict):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[HARDWARE] Active Compute Target: {device.type.upper()}")
+    print(f"[HARDWARE] Hardware locked. Active Target: {device.type.upper()}")
     
-    # Clone the server's weights and push them directly into VRAM
-    local_weights = global_weights['layer_1'].clone().to(device)
+    X_train, y_train = fetch_and_prep_data()
+    X_train, y_train = X_train.to(device), y_train.to(device)
     
-    # ---------------------------------------------------------
-    # MATHEMATICAL OPTIMIZATION: Simulated Gradient Descent
-    # ---------------------------------------------------------
-    print(f"[MATH] Initial Local Tensors in VRAM: {local_weights.cpu().numpy()}")
+    # Initialize model and inject the Global Brain from the Server
+    model = FraudNet().to(device)
+    model.load_state_dict(global_state_dict)
     
-    # Simulate turning the mathematical knobs based on local private data
-    mock_gradient = torch.tensor([-0.5, 1.2, -0.3]).to(device)
+    criterion = nn.BCELoss() # Binary Cross Entropy (Fraud vs Not Fraud)
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
     
-    # Formula: local_weight = local_weight - (learning_rate * gradient)
-    local_weights = local_weights - (learning_rate * mock_gradient)
+    print(f"[TRAINING] Commencing Backpropagation on {device.type.upper()}...")
+    epochs = 5
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        outputs = model(X_train)
+        loss = criterion(outputs, y_train)
+        loss.backward()
+        optimizer.step()
+        
+        if epoch == 0 or epoch == epochs - 1:
+             print(f"   -> Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
     
-    print(f"[MATH] Optimized Local Tensors after training: {local_weights.cpu().numpy()}")
+    print("[TRAINING] Deep Learning complete. Extracting optimized network weights.")
     
-    # Bring the tensors back from GPU VRAM to system memory (CPU) for serialization
-    return {'layer_1': local_weights.to("cpu")}, data_size
+    # Return the newly optimized state dict to the CPU memory
+    model.to("cpu")
+    return model.state_dict(), len(X_train)
 
 def run_client():
-    # Establish high-speed TCP socket connection to our Aggregator Server
-    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server at {SERVER_ADDR}...")
+    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server...")
     with grpc.insecure_channel(SERVER_ADDR) as channel:
         stub = federated_pb2_grpc.FederatedLearningStub(channel)
         
-        # 1. Request the latest global model from the server
-        print("[RPC] Pulling global model state...")
         request = federated_pb2.ModelRequest(client_id=CLIENT_ID)
         global_model_response = stub.GetGlobalModel(request)
         
-        # Deserialize the binary stream from the network back into a PyTorch Matrix
         buffer = io.BytesIO(global_model_response.model_weights)
-        global_weights = torch.load(buffer, weights_only=True)
-        print(f"[RPC] Global model for round {global_model_response.round_number} loaded successfully.")
+        global_state_dict = torch.load(buffer, weights_only=True)
         
-        # 2. Trigger GPU training loop
-        optimized_weights, local_n = train_local_model(
-            global_weights, 
-            data_size=250, 
-            learning_rate=0.05
-        )
+        # Trigger actual Deep Learning on the GPU
+        optimized_state_dict, local_n = train_local_model(global_state_dict)
         
-        # 3. Serialize our optimized VRAM outputs back into bytes for transmission
         out_buffer = io.BytesIO()
-        torch.save(optimized_weights, out_buffer)
+        torch.save(optimized_state_dict, out_buffer)
         
-        # 4. Beam the mathematical updates back to the server contract
-        print("[RPC] Streaming local mathematical adjustments back to server...")
+        print("[RPC] Streaming optimized FraudNet weights back to server...")
         update_payload = federated_pb2.LocalUpdate(
             client_id=CLIENT_ID,
             data_size=local_n,
