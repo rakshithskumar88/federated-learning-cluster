@@ -67,27 +67,37 @@ def fetch_and_prep_data():
 
 def train_local_model(global_state_dict):
     # ---------------------------------------------------------
-    # STRICT HARDWARE ENFORCEMENT
+    # DYNAMIC STRICT HARDWARE ENFORCEMENT
     # ---------------------------------------------------------
-    # 1. Verify we are running the AMD ROCm version of PyTorch
-    if not torch.version.hip:
-        raise RuntimeError("[FATAL] This PyTorch binary was not compiled with AMD ROCm/HIP support!")
+    if "Radeon" in CLIENT_ID:
+        # We are on the AMD Node. Enforce ROCm strictly.
+        if not getattr(torch.version, 'hip', None):
+            raise RuntimeError("[FATAL] Expected AMD ROCm PyTorch binary, but HIP is missing!")
+        if not torch.cuda.is_available():
+            raise RuntimeError("[FATAL] ROCm failed to initialize. The AMD GPU is locked or missing.")
+        compute_backend = "AMD ROCm"
+        
+    elif "RTX" in CLIENT_ID:
+        # We are on the NVIDIA Node. Enforce standard CUDA strictly.
+        if getattr(torch.version, 'hip', None):
+            raise RuntimeError("[FATAL] Expected NVIDIA PyTorch binary, but found AMD ROCm!")
+        if not torch.cuda.is_available():
+            raise RuntimeError("[FATAL] NVIDIA CUDA failed to initialize. Check nvidia-container-runtime.")
+        compute_backend = "NVIDIA CUDA"
+        
+    else:
+        compute_backend = "CPU"
+
+    # PyTorch uses 'cuda' as the universal API alias for both NVIDIA and AMD GPUs
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+    print(f"[HARDWARE] Hardware locked. Active Target: {compute_backend} ({device_name})")
     
-    # 2. Verify the Kernel Fusion Driver (KFD) successfully mapped the GPU
-    if not torch.cuda.is_available():
-        raise RuntimeError("[FATAL] ROCm failed to initialize. The AMD GPU is locked by the host GUI or missing.")
-    
-    # 3. Lock the device to the AMD APU (PyTorch uses 'cuda' as the alias for HIP)
-    device = torch.device("cuda")
-    print(f"[HARDWARE] Hardware locked. Active Target: AMD ROCm ({torch.cuda.get_device_name(0)})")
-    
-    # Identify if we are running on NVIDIA (CUDA) or AMD (ROCm/HIP)
-    compute_backend = "AMD ROCm" if torch.version.hip else ("NVIDIA CUDA" if torch.cuda.is_available() else "CPU")
-    print(f"[HARDWARE] Hardware locked. Active Target: {compute_backend}")
-    
+    # Fetch Data
     X_train, y_train = fetch_and_prep_data()
     X_train, y_train = X_train.to(device), y_train.to(device)
     
+    # Initialize Model
     model = FraudNet().to(device)
     model.load_state_dict(global_state_dict)
     
@@ -106,8 +116,7 @@ def train_local_model(global_state_dict):
         if epoch == 0 or epoch == epochs - 1:
              print(f"   -> Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
              
-        # MEMORY MANAGEMENT: Force VRAM cleanup after every epoch to prevent 
-        # crashing GNOME or hitting APU shared memory limits.
+        # MEMORY MANAGEMENT: Prevent active display buffers from crashing the AMD APU
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
