@@ -58,16 +58,25 @@ services:
     environment:
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
       - CLIENT_ID=node_belur_02_Radeon890M
-      # CRITICAL: Pointing to the bridge network DNS name, NOT localhost
       - SERVER_ADDR=server:50052
       - PYTHONUNBUFFERED=1
       - HSA_ENABLE_SDMA=0
+      # =========================================================================
+      # NEW: APU SHARED MEMORY & GUI LOCK BYPASS
+      # =========================================================================
+      # Force ROCm to strictly target GPU 0 to prevent probing conflicts
+      - ROCR_VISIBLE_DEVICES=0
+      - HIP_VISIBLE_DEVICES=0
+      # Force PyTorch to tolerate fragmented memory caused by GNOME/Wayland
+      - PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:128
+      # =========================================================================
     working_dir: /app
     privileged: true
     ipc: host
     devices:
       - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
+      # NEW: Explicitly map ONLY the AMD render node, not the entire shared /dev/dri directory
+      - /dev/dri/renderD128:/dev/dri/renderD128
     command: >
       bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && 
@@ -76,7 +85,6 @@ services:
       find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && 
       find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
       echo '[SYSTEM] Patch complete. Booting Deep Learning Pipeline...' && 
-      sleep 10 && 
       python src/client.py"
     networks:
       - federated_network

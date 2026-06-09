@@ -2,6 +2,7 @@
 import os
 import sys
 import io
+import time  # NEW: Required for resilient network polling
 import grpc
 import torch
 import torch.nn as nn
@@ -15,11 +16,10 @@ import federated_pb2
 import federated_pb2_grpc
 
 CLIENT_ID = os.getenv("CLIENT_ID", "local_node")
-# CRITICAL FIX: Default to 'server:50052' for standard bridge networks
 SERVER_ADDR = os.getenv("SERVER_ADDR", "server:50052")
 
 # ---------------------------------------------------------
-# NEURAL NETWORK ARCHITECTURE
+# IDENTICAL NEURAL NETWORK ARCHITECTURE
 # ---------------------------------------------------------
 class FraudNet(nn.Module):
     def __init__(self):
@@ -47,14 +47,12 @@ def fetch_and_prep_data():
     hf_dataset = load_dataset("jyunyilin/credit-card-fraud-detection", split="train")
     df = hf_dataset.to_pandas()
     
-    # We take a sample to accelerate the demonstration
     df = df.sample(n=2000, random_state=42)
     
-    # Simulating Data Privacy Split (Bank A vs Bank B)
     if "RTX4070" in CLIENT_ID:
-        df = df.iloc[:1000] # NVIDIA takes the first 1000 transactions
+        df = df.iloc[:1000]
     else:
-        df = df.iloc[1000:] # AMD takes the next 1000 transactions
+        df = df.iloc[1000:]
 
     X = df.drop(columns=['Class']).values
     y = df['Class'].values.reshape(-1, 1)
@@ -77,7 +75,7 @@ def train_local_model(global_state_dict):
     model = FraudNet().to(device)
     model.load_state_dict(global_state_dict)
     
-    criterion = nn.BCELoss() # Binary Cross Entropy (Fraud vs Not Fraud)
+    criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.01)
     
     print(f"[TRAINING] Commencing Backpropagation on {device.type.upper()}...")
@@ -97,31 +95,50 @@ def train_local_model(global_state_dict):
     model.to("cpu")
     return model.state_dict(), len(X_train)
 
+# ---------------------------------------------------------
+# NETWORK ORCHESTRATION: Resilient Polling
+# ---------------------------------------------------------
 def run_client():
-    print(f"[NETWORK] Node '{CLIENT_ID}' connecting to Aggregation Server at {SERVER_ADDR}...")
-    with grpc.insecure_channel(SERVER_ADDR) as channel:
-        stub = federated_pb2_grpc.FederatedLearningStub(channel)
-        
-        request = federated_pb2.ModelRequest(client_id=CLIENT_ID)
-        global_model_response = stub.GetGlobalModel(request)
-        
-        buffer = io.BytesIO(global_model_response.model_weights)
-        global_state_dict = torch.load(buffer, weights_only=True)
-        
-        optimized_state_dict, local_n = train_local_model(global_state_dict)
-        
-        out_buffer = io.BytesIO()
-        torch.save(optimized_state_dict, out_buffer)
-        
-        print("[RPC] Streaming optimized FraudNet weights back to server...")
-        update_payload = federated_pb2.LocalUpdate(
-            client_id=CLIENT_ID,
-            data_size=local_n,
-            model_weights=out_buffer.getvalue()
-        )
-        
-        ack = stub.SendLocalUpdate(update_payload)
-        print(f"[RPC] Server Response: {ack.message}")
+    print(f"[NETWORK] Node '{CLIENT_ID}' locating Aggregation Server at {SERVER_ADDR}...")
+    
+    max_retries = 20
+    for attempt in range(1, max_retries + 1):
+        try:
+            with grpc.insecure_channel(SERVER_ADDR) as channel:
+                stub = federated_pb2_grpc.FederatedLearningStub(channel)
+                request = federated_pb2.ModelRequest(client_id=CLIENT_ID)
+                
+                # The timeout prevents it from hanging infinitely if the server is offline
+                print(f"[RPC] Pulling global model state (Attempt {attempt}/{max_retries})...")
+                global_model_response = stub.GetGlobalModel(request, timeout=10)
+                
+                buffer = io.BytesIO(global_model_response.model_weights)
+                global_state_dict = torch.load(buffer, weights_only=True)
+                
+                # Trigger actual Deep Learning on the GPU
+                optimized_state_dict, local_n = train_local_model(global_state_dict)
+                
+                out_buffer = io.BytesIO()
+                torch.save(optimized_state_dict, out_buffer)
+                
+                print("[RPC] Streaming optimized FraudNet weights back to server...")
+                update_payload = federated_pb2.LocalUpdate(
+                    client_id=CLIENT_ID,
+                    data_size=local_n,
+                    model_weights=out_buffer.getvalue()
+                )
+                
+                ack = stub.SendLocalUpdate(update_payload)
+                print(f"[RPC] Server Response: {ack.message}")
+                
+                # Success! Exit the function.
+                return 
+                
+        except grpc.RpcError as e:
+            print(f"[WARNING] Server unreachable. Sleeping for 15 seconds before retry...")
+            time.sleep(15)
+            
+    print("[FATAL] Could not connect to Aggregator Server after maximum attempts.")
 
 if __name__ == '__main__':
     run_client()
