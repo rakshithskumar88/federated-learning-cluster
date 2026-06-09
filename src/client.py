@@ -66,8 +66,24 @@ def fetch_and_prep_data():
     return X_tensor, y_tensor
 
 def train_local_model(global_state_dict):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[HARDWARE] Hardware locked. Active Target: {device.type.upper()}")
+    # ---------------------------------------------------------
+    # STRICT HARDWARE ENFORCEMENT
+    # ---------------------------------------------------------
+    # 1. Verify we are running the AMD ROCm version of PyTorch
+    if not torch.version.hip:
+        raise RuntimeError("[FATAL] This PyTorch binary was not compiled with AMD ROCm/HIP support!")
+    
+    # 2. Verify the Kernel Fusion Driver (KFD) successfully mapped the GPU
+    if not torch.cuda.is_available():
+        raise RuntimeError("[FATAL] ROCm failed to initialize. The AMD GPU is locked by the host GUI or missing.")
+    
+    # 3. Lock the device to the AMD APU (PyTorch uses 'cuda' as the alias for HIP)
+    device = torch.device("cuda")
+    print(f"[HARDWARE] Hardware locked. Active Target: AMD ROCm ({torch.cuda.get_device_name(0)})")
+    
+    # Identify if we are running on NVIDIA (CUDA) or AMD (ROCm/HIP)
+    compute_backend = "AMD ROCm" if torch.version.hip else ("NVIDIA CUDA" if torch.cuda.is_available() else "CPU")
+    print(f"[HARDWARE] Hardware locked. Active Target: {compute_backend}")
     
     X_train, y_train = fetch_and_prep_data()
     X_train, y_train = X_train.to(device), y_train.to(device)
@@ -78,7 +94,7 @@ def train_local_model(global_state_dict):
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.01)
     
-    print(f"[TRAINING] Commencing Backpropagation on {device.type.upper()}...")
+    print(f"[TRAINING] Commencing Backpropagation on {compute_backend}...")
     epochs = 5
     for epoch in range(epochs):
         optimizer.zero_grad()
@@ -89,8 +105,13 @@ def train_local_model(global_state_dict):
         
         if epoch == 0 or epoch == epochs - 1:
              print(f"   -> Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+             
+        # MEMORY MANAGEMENT: Force VRAM cleanup after every epoch to prevent 
+        # crashing GNOME or hitting APU shared memory limits.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
-    print("[TRAINING] Deep Learning complete. Extracting optimized network weights.")
+    print(f"[TRAINING] {compute_backend} Deep Learning complete. Extracting weights.")
     
     model.to("cpu")
     return model.state_dict(), len(X_train)

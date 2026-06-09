@@ -53,29 +53,34 @@ services:
   client_belur_02:
     image: docker.io/library/python:3.11-slim
     container_name: fl_client_node_2
+    network_mode: host
     volumes:
       - .:/app
     environment:
-      - HSA_OVERRIDE_GFX_VERSION=11.0.0
       - CLIENT_ID=node_belur_02_Radeon890M
-      - SERVER_ADDR=server:50052
+      - SERVER_ADDR=127.0.0.1:50052
       - PYTHONUNBUFFERED=1
+      
+      # --- ROCM HARDWARE SPOOFING ---
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      
+      # --- MEMORY CONTENTION BYPASS (THE APU FIXES) ---
+      # 1. Disable SDMA: Prevents PCIe bus deadlocks on shared-memory APUs
       - HSA_ENABLE_SDMA=0
-      # =========================================================================
-      # NEW: APU SHARED MEMORY & GUI LOCK BYPASS
-      # =========================================================================
-      # Force ROCm to strictly target GPU 0 to prevent probing conflicts
+      # 2. Strict Isolation: Force ROCm to ignore the NVIDIA card entirely
       - ROCR_VISIBLE_DEVICES=0
       - HIP_VISIBLE_DEVICES=0
-      # Force PyTorch to tolerate fragmented memory caused by GNOME/Wayland
+      # 3. Fragmented Memory Toleration: Instructs PyTorch to allocate memory in smaller 
+      # blocks (128MB) so it can squeeze in alongside GNOME's active display buffers.
       - PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:128
-      # =========================================================================
+      
     working_dir: /app
     privileged: true
     ipc: host
     devices:
+      # Expose the Kernel Fusion Driver
       - /dev/kfd:/dev/kfd
-      # NEW: Explicitly map ONLY the AMD render node, not the entire shared /dev/dri directory
+      # EXPLICIT MAPPING: Only map the specific AMD render node, do NOT map the whole /dev/dri directory
       - /dev/dri/renderD128:/dev/dri/renderD128
     command: >
       bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
@@ -86,10 +91,6 @@ services:
       find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
       echo '[SYSTEM] Patch complete. Booting Deep Learning Pipeline...' && 
       python src/client.py"
-    networks:
-      - federated_network
-    depends_on:
-      - server
 
 networks:
   federated_network:
