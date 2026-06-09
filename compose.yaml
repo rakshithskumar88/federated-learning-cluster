@@ -81,7 +81,7 @@ services:
       # Expose the Kernel Fusion Driver
       - /dev/kfd:/dev/kfd
       # EXPLICIT MAPPING: Only map the specific AMD render node, do NOT map the whole /dev/dri directory
-      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri:/dev/dri
     command: >
       bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && 
