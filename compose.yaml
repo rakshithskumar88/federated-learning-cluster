@@ -61,36 +61,32 @@ services:
       - SERVER_ADDR=127.0.0.1:50052
       - PYTHONUNBUFFERED=1
       
-      # --- ROCM HARDWARE SPOOFING ---
+      # 1. Spoofer for the RDNA3.5 Architecture
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
       
-      # --- MEMORY CONTENTION BYPASS (THE APU FIXES) ---
-      # 1. Disable SDMA: Prevents PCIe bus deadlocks on shared-memory APUs
+      # 2. Hardware / Memory conflict bypasses
       - HSA_ENABLE_SDMA=0
-      # 2. Strict Isolation: Force ROCm to ignore the NVIDIA card entirely
       - ROCR_VISIBLE_DEVICES=0
       - HIP_VISIBLE_DEVICES=0
-      # 3. Fragmented Memory Toleration: Instructs PyTorch to allocate memory in smaller 
-      # blocks (128MB) so it can squeeze in alongside GNOME's active display buffers.
       - PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:128
+      
+      # 3. CRITICAL: Prevent OpenMP from deadlocking the APU during import
+      - OMP_NUM_THREADS=1
       
     working_dir: /app
     privileged: true
     ipc: host
     devices:
-      # Expose the Kernel Fusion Driver
       - /dev/kfd:/dev/kfd
-      # EXPLICIT MAPPING: Only map the specific AMD render node, do NOT map the whole /dev/dri directory
       - /dev/dri:/dev/dri
+      
+    # 4. REMOVED PATCHELF. UPGRADED TO ROCm 6.2. ADDED UNBUFFERED PYTHON EXECUTION.
     command: >
-      bash -c "apt-get update && apt-get install -y patchelf libnuma1 && 
+      bash -c "apt-get update && apt-get install -y libnuma1 && 
       pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy grpcio grpcio-tools protobuf datasets pandas scikit-learn && 
-      pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.0 && 
-      echo '[SYSTEM] Scanning and patching ROCm binaries with patchelf...' && 
-      find /usr/local -name 'libamdhip64.so' -exec patchelf --clear-execstack {} + && 
-      find /usr/local -name 'libhiprtc.so' -exec patchelf --clear-execstack {} + && 
-      echo '[SYSTEM] Patch complete. Booting Deep Learning Pipeline...' && 
-      python src/client.py"
+      pip install --trusted-host pypi.org --trusted-host download.pytorch.org torch --index-url https://download.pytorch.org/whl/rocm6.2 && 
+      echo '[SYSTEM] Booting Deep Learning Pipeline...' && 
+      python -u src/client.py"
 
 networks:
   federated_network:
